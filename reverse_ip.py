@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 VT_API_KEY = os.getenv("VT_API_KEY")
-ST_API_KEY = os.getenv("ST_API_KEY")
 
 TIMEOUT = 30
 CACHE_DIR = "cache"
@@ -21,7 +20,10 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 def get_cache_file(ip):
-    return os.path.join(CACHE_DIR, f"{ip}.json")
+    return os.path.join(
+        CACHE_DIR,
+        f"{ip}.json"
+    )
 
 
 def load_cache(ip):
@@ -31,10 +33,15 @@ def load_cache(ip):
     if os.path.exists(cache_file):
 
         try:
-            with open(cache_file, "r") as f:
+
+            with open(
+                cache_file,
+                "r"
+            ) as f:
+
                 return json.load(f)
 
-        except Exception:
+        except:
             pass
 
     return None
@@ -44,7 +51,10 @@ def save_cache(ip, results):
 
     cache_file = get_cache_file(ip)
 
-    with open(cache_file, "w") as f:
+    with open(
+        cache_file,
+        "w"
+    ) as f:
 
         json.dump(
             {
@@ -56,37 +66,26 @@ def save_cache(ip, results):
         )
 
 
-def safe_request(method, url, headers=None):
+def safe_request(url, headers=None):
 
     for attempt in range(3):
 
         try:
 
-            time.sleep(2)
+            time.sleep(3)
 
-            if method == "GET":
-
-                r = requests.get(
-                    url,
-                    headers=headers,
-                    timeout=TIMEOUT
-                )
-
-            else:
-
-                r = requests.post(
-                    url,
-                    headers=headers,
-                    timeout=TIMEOUT
-                )
+            r = requests.get(
+                url,
+                headers=headers,
+                timeout=TIMEOUT
+            )
 
             return r
 
         except Exception as e:
 
             print(
-                f"[RETRY {attempt+1}/3] "
-                f"{url}"
+                f"[RETRY {attempt+1}/3]"
             )
 
             print(e)
@@ -96,12 +95,17 @@ def safe_request(method, url, headers=None):
     return None
 
 
+#################################################
+# VIRUSTOTAL
+#################################################
+
 def vt_lookup(ip):
 
     results = []
+    seen = set()
 
     url = (
-        f"https://www.virustotal.com/api/v3/"
+        "https://www.virustotal.com/api/v3/"
         f"ip_addresses/{ip}/resolutions"
     )
 
@@ -109,119 +113,212 @@ def vt_lookup(ip):
         "x-apikey": VT_API_KEY
     }
 
-    r = safe_request(
-        "GET",
-        url,
-        headers
-    )
+    while url:
 
-    if not r:
-        return results
+        r = safe_request(
+            url,
+            headers
+        )
 
-    if r.status_code == 200:
+        if not r:
+            break
+
+        if r.status_code == 429:
+
+            print(
+                f"[VT] {ip} Rate Limited"
+            )
+
+            break
+
+        if r.status_code != 200:
+
+            print(
+                f"[VT] {ip} "
+                f"HTTP {r.status_code}"
+            )
+
+            break
 
         data = r.json()
 
-        for item in data.get("data", []):
+        for item in data.get(
+            "data",
+            []
+        ):
 
-            hostname = (
-                item.get("attributes", {})
-                .get("host_name")
+            host = (
+                item.get(
+                    "attributes",
+                    {}
+                ).get(
+                    "host_name"
+                )
             )
 
-            if hostname:
+            if (
+                host
+                and host not in seen
+            ):
 
-                results.append({
-                    "domain": hostname,
-                    "source": "VirusTotal"
-                })
+                seen.add(host)
 
-    elif r.status_code == 429:
+                results.append(
+                    {
+                        "domain": host,
+                        "source": "VirusTotal"
+                    }
+                )
 
-        print(f"[VT] {ip} Rate Limited")
-
-    else:
-
-        print(
-            f"[VT] {ip} HTTP {r.status_code}"
+        url = (
+            data.get(
+                "links",
+                {}
+            ).get(
+                "next"
+            )
         )
 
     return results
 
+#################################################
+# URLSCAN
+#################################################
 
-def st_lookup(ip):
+def urlscan_lookup(ip):
 
     results = []
 
     url = (
-        f"https://api.securitytrails.com/v1/ips/{ip}"
+        "https://urlscan.io/api/v1/search/"
+        f"?q=ip:{ip}"
     )
 
-    headers = {
-        "APIKEY": ST_API_KEY
-    }
-
-    r = safe_request(
-        "GET",
-        url,
-        headers
-    )
+    r = safe_request(url)
 
     if not r:
         return results
 
-    if r.status_code == 200:
+    if r.status_code != 200:
+
+        print(
+            f"[URLSCAN] {ip} "
+            f"HTTP {r.status_code}"
+        )
+
+        return results
+
+    try:
 
         data = r.json()
 
-        hostname = data.get("hostname")
+        seen = set()
 
-        if isinstance(hostname, str):
+        for item in data.get(
+            "results",
+            []
+        ):
 
-            results.append({
-                "domain": hostname,
-                "source": "SecurityTrails"
-            })
+            page = item.get(
+                "page",
+                {}
+            )
 
-        hostnames = data.get("hostnames")
+            if page.get("ip") != ip:
+                continue
 
-        if isinstance(hostnames, list):
+            candidates = []
 
-            for h in hostnames:
+            page_domain = page.get(
+                "domain"
+            )
 
-                results.append({
-                    "domain": h,
-                    "source": "SecurityTrails"
-                })
+            if page_domain:
+                candidates.append(
+                    page_domain
+                )
 
-    elif r.status_code == 429:
+            task_domain = (
+                item.get(
+                    "task",
+                    {}
+                ).get("domain")
+            )
 
-        print(f"[ST] {ip} Rate Limited")
+            if task_domain:
+                candidates.append(
+                    task_domain
+                )
 
-    else:
+            ptr = page.get("ptr")
+
+            if ptr:
+                candidates.append(
+                    ptr
+                )
+
+            for domain in candidates:
+
+                domain = (
+                    domain
+                    .strip()
+                    .lower()
+                )
+
+                if (
+                    domain
+                    and domain not in seen
+                ):
+
+                    seen.add(domain)
+
+                    results.append(
+                        {
+                            "domain":
+                                domain,
+                            "source":
+                                "URLScan"
+                        }
+                    )
+
+    except Exception as e:
 
         print(
-            f"[ST] {ip} HTTP {r.status_code}"
+            f"[URLSCAN ERROR] "
+            f"{ip}: {e}"
         )
 
     return results
 
 
-def verify_domain(domain, target_ip):
+#################################################
+# VERIFY
+#################################################
+
+def verify_domain(
+    domain,
+    target_ip
+):
 
     try:
 
-        resolved = socket.gethostbyname(domain)
+        resolved = (
+            socket.gethostbyname(
+                domain
+            )
+        )
 
-        if resolved == target_ip:
-            return True
+        return (
+            resolved == target_ip
+        )
 
+    except:
         return False
 
-    except Exception:
 
-        return False
-
+#################################################
+# PROCESS
+#################################################
 
 def process_ip(ip):
 
@@ -229,17 +326,23 @@ def process_ip(ip):
 
     if cached:
 
-        print(f"[CACHE] {ip}")
+        print(
+            f"[CACHE] {ip}"
+        )
 
-        return cached["results"]
+        return cached[
+            "results"
+        ]
 
-    print(f"[*] Processing {ip}")
+    print(
+        f"[*] Processing {ip}"
+    )
 
     domain_map = {}
 
-    #################################################
-    # VIRUSTOTAL
-    #################################################
+    #################################
+    # VT
+    #################################
 
     for item in vt_lookup(ip):
 
@@ -247,59 +350,78 @@ def process_ip(ip):
 
         if domain not in domain_map:
 
-            domain_map[domain] = {
-                "source": item["source"]
-            }
+            domain_map[
+                domain
+            ] = item["source"]
 
         else:
 
-            if item["source"] not in domain_map[domain]["source"]:
+            if (
+                item["source"]
+                not in
+                domain_map[domain]
+            ):
 
-                domain_map[domain]["source"] += (
-                    "|" + item["source"]
+                domain_map[
+                    domain
+                ] += (
+                    "|" +
+                    item["source"]
                 )
 
-    #################################################
-    # SECURITYTRAILS
-    #################################################
+    #################################
+    # URLSCAN
+    #################################
 
-    for item in st_lookup(ip):
+    for item in urlscan_lookup(ip):
 
         domain = item["domain"]
 
         if domain not in domain_map:
 
-            domain_map[domain] = {
-                "source": item["source"]
-            }
+            domain_map[
+                domain
+            ] = item["source"]
 
         else:
 
-            if item["source"] not in domain_map[domain]["source"]:
+            if (
+                item["source"]
+                not in
+                domain_map[domain]
+            ):
 
-                domain_map[domain]["source"] += (
-                    "|" + item["source"]
+                domain_map[
+                    domain
+                ] += (
+                    "|" +
+                    item["source"]
                 )
 
-    #################################################
+    #################################
     # VERIFY
-    #################################################
+    #################################
 
     results = []
 
-    for domain, meta in domain_map.items():
+    for (
+        domain,
+        source
+    ) in domain_map.items():
 
         live = verify_domain(
             domain,
             ip
         )
 
-        results.append({
-            "ip": ip,
-            "domain": domain,
-            "source": meta["source"],
-            "live_match": live
-        })
+        results.append(
+            {
+                "ip": ip,
+                "domain": domain,
+                "source": source,
+                "live_match": live
+            }
+        )
 
     save_cache(
         ip,
@@ -307,27 +429,37 @@ def process_ip(ip):
     )
 
     print(
-        f"[+] {ip} -> {len(results)} domain(s)"
+        f"[+] {ip} -> "
+        f"{len(results)} domains"
     )
 
     return results
 
 
+#################################################
+# MAIN
+#################################################
+
 def main():
 
     if not VT_API_KEY:
-        print("VT_API_KEY not set")
+
+        print(
+            "VT_API_KEY not set"
+        )
+
         return
 
-    if not ST_API_KEY:
-        print("ST_API_KEY not set")
-        return
-
-    with open("ips.txt") as f:
+    with open(
+        "ips.txt"
+    ) as f:
 
         ips = [
+
             x.strip()
+
             for x in f
+
             if x.strip()
         ]
 
@@ -335,17 +467,23 @@ def main():
 
     total = len(ips)
 
-    for idx, ip in enumerate(ips, start=1):
+    for idx, ip in enumerate(
+        ips,
+        start=1
+    ):
 
         print(
-            f"\n[{idx}/{total}] {ip}"
+            f"\n[{idx}/{total}] "
+            f"{ip}"
         )
 
         try:
 
             rows = process_ip(ip)
 
-            all_rows.extend(rows)
+            all_rows.extend(
+                rows
+            )
 
         except Exception as e:
 
@@ -373,27 +511,55 @@ def main():
         )
 
         writer.writeheader()
-        writer.writerows(all_rows)
+
+        writer.writerows(
+            all_rows
+        )
 
     with open(
         "live_domains.txt",
         "w"
     ) as f:
 
+        written = set()
+
         for row in all_rows:
 
-            if row["live_match"]:
+            if (
+                row["live_match"]
+                and
+                row["domain"]
+                not in written
+            ):
 
-                f.write(
-                    row["domain"] + "\n"
+                written.add(
+                    row["domain"]
                 )
 
-    print("\n========== DONE ==========")
-    print(f"IPs      : {len(ips)}")
-    print(f"Records  : {len(all_rows)}")
-    print("CSV      : output.csv")
-    print("Live TXT : live_domains.txt")
-    print("Cache    : cache/")
+                f.write(
+                    row["domain"]
+                    + "\n"
+                )
+
+    print(
+        "\n========== DONE =========="
+    )
+
+    print(
+        f"IPs     : {len(ips)}"
+    )
+
+    print(
+        f"Records : {len(all_rows)}"
+    )
+
+    print(
+        "CSV     : output.csv"
+    )
+
+    print(
+        "Live    : live_domains.txt"
+    )
 
 
 if __name__ == "__main__":
