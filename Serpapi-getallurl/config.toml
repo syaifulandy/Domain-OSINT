@@ -1,0 +1,30 @@
+[serpapi]
+api_key = ""
+
+[search]
+# Engine yang digunakan. Saat ini baru support google dan duckduckgo karena api search bing hasilnya kurang sesuai
+engines = ["google", "duckduckgo"]
+
+# Hard limit. Script tetap berhenti lebih awal jika hasil habis,
+# tidak ada URL baru, halaman berulang, atau tidak ada next page.
+max_pages = 10
+
+# Jeda sebelum mengambil halaman selanjutnya.
+delay_seconds = 1.0
+
+# Lokalisasi Google.
+google_gl = "id"
+google_hl = "id"
+
+# Lokalisasi Bing.
+duckduckgo_kl = "id-en"
+
+safe_search = true
+
+[cache]
+# Cache lokal mencegah query domain yang sama berulang kali.
+enabled = true
+days = 7
+
+[output]
+filename = "results.xlsx"
